@@ -88,7 +88,7 @@ void dxl_tx_packet()
 	if( gbInstructionPacket[INSTRUCTION] == INST_READ )
 		dxl_hal_set_timeout( gbInstructionPacket[PARAMETER+1] + 6 );
 	else if ( gbInstructionPacket[INSTRUCTION] == INST_SYNC_READ )
-        dxl_hal_set_timeout( gbInstructionPacket[PARAMETER+1] + 6 );
+        dxl_hal_set_timeout( gbInstructionPacket[PARAMETER+1] + 6 + 200 ); // + 200 adds 2.4 ms to the timeout
     else
 		dxl_hal_set_timeout( 6 );
 
