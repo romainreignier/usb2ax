@@ -1,87 +1,95 @@
-// windows version
-// by windows serial programming
-#include <windows.h>
+/**
+Modification of the HAL of the Dynamixel SDK to be used with USB2AX.
+
+Nicolas Saugnier
+*/
+
 #include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <termios.h>
+#include <linux/serial.h>
+#include <sys/ioctl.h>
+#include <sys/time.h>
+
 #include "dxl_hal.h"
 
-#define LATENCY_TIME		(16) //ms	(USB2Serial Latency timer)
-#define IN_TRASFER_SIZE		(512) //unsigned char
+int	gSocket_fd	= -1;
+long	glStartTime	= 0;
+float	gfRcvWaitTime	= 0.0f;
+float	gfByteTransTime	= 0.0f;
 
-HANDLE ghSerial_Handle = INVALID_HANDLE_VALUE; // Serial port handle
-float gfByteTransTime = 0.0f;
-float gfRcvWaitTime = 0.0f;
-LARGE_INTEGER gStartTime;
+char	gDeviceName[20];
 
-
-int dxl_hal_open( int devIndex, float baudrate )
+int dxl_hal_open(int deviceIndex, float baudrate)
 {
-	// Opening device
-	// devIndex: Device index
-	// baudrate: Real baudrate (ex> 115200, 57600, 38400...)
-	// Return: 0(Failed), 1(Succeed)
+	struct termios newtio;
+	//struct serial_struct serinfo;
+	char dev_name[100] = {0, };
 
-	DCB Dcb;
-	COMMTIMEOUTS Timeouts;
-	DWORD dwError;
-	char PortName[15];
+	sprintf(dev_name, "/dev/ttyACM%d", deviceIndex); // USB2AX is ttyACM
 
+	strcpy(gDeviceName, dev_name);
+	memset(&newtio, 0, sizeof(newtio));
 	dxl_hal_close();
+	
+	if((gSocket_fd = open(gDeviceName, O_RDWR|O_NOCTTY|O_NONBLOCK)) < 0) {
+		fprintf(stderr, "device open error: %s\n", dev_name);
+		goto DXL_HAL_OPEN_ERROR;
+	}
 
-	// Make real port name
-	sprintf_s(PortName, 15, "\\\\.\\COM%d", devIndex);
-	// Open serial device
-	ghSerial_Handle = CreateFile( PortName, GENERIC_READ|GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL );
-	if( ghSerial_Handle == INVALID_HANDLE_VALUE )
+	newtio.c_cflag		= B1000000|CS8|CLOCAL|CREAD;
+	newtio.c_iflag		= IGNPAR;
+	newtio.c_oflag		= 0;
+	newtio.c_lflag		= 0;
+	newtio.c_cc[VTIME]	= 0;	// time-out 값 (TIME * 0.1초) 0 : disable
+	newtio.c_cc[VMIN]	= 0;	// MIN 은 read 가 return 되기 위한 최소 문자 개수
+
+	tcflush(gSocket_fd, TCIFLUSH);
+	tcsetattr(gSocket_fd, TCSANOW, &newtio);
+	
+	if(gSocket_fd == -1)
 		return 0;
-
-	// Setting communication property
-	Dcb.DCBlength = sizeof(DCB);
-	if( GetCommState( ghSerial_Handle, &Dcb ) == FALSE )
-		goto DXL_HAL_OPEN_ERROR;
+        
+	//USB2AX uses the CDC ACM driver for which these settings do not exist.
+    /*
+	if(ioctl(gSocket_fd, TIOCGSERIAL, &serinfo) < 0) {
+		fprintf(stderr, "Cannot get serial info\n");
+		return 0;
+	}
 	
-	// Set baudrate
-	gfByteTransTime = 1000.0f / baudrate * 10.0f; // 1000/baudrate(bit per msec) * 10(start bit + data bit + stop bit)
-	Dcb.BaudRate			= (DWORD)baudrate;	
-	Dcb.ByteSize			= 8;					// Data bit = 8bit
-	Dcb.Parity				= NOPARITY;				// No parity
-	Dcb.StopBits			= ONESTOPBIT;			// Stop bit = 1
-	Dcb.fParity				= NOPARITY;				// No Parity check
-	Dcb.fBinary				= 1;					// Binary mode
-	Dcb.fNull				= 0;					// Get Null byte
-	Dcb.fAbortOnError		= 1;
-	Dcb.fErrorChar			= 0;
-	// Not using XOn/XOff
-	Dcb.fOutX				= 0;
-	Dcb.fInX				= 0;
-	// Not using H/W flow control
-	Dcb.fDtrControl			= DTR_CONTROL_DISABLE;
-	Dcb.fRtsControl			= RTS_CONTROL_DISABLE;
-	Dcb.fDsrSensitivity		= 0;
-	Dcb.fOutxDsrFlow		= 0;
-	Dcb.fOutxCtsFlow		= 0;
-	if( SetCommState( ghSerial_Handle, &Dcb ) == FALSE )
-		goto DXL_HAL_OPEN_ERROR;
-
-	if( SetCommMask( ghSerial_Handle, 0 ) == FALSE ) // Not using Comm event
-		goto DXL_HAL_OPEN_ERROR;
-	if( SetupComm( ghSerial_Handle, 4096, 4096 ) == FALSE ) // Buffer size (Rx,Tx)
-		goto DXL_HAL_OPEN_ERROR;
-	if( PurgeComm( ghSerial_Handle, PURGE_TXABORT|PURGE_TXCLEAR|PURGE_RXABORT|PURGE_RXCLEAR ) == FALSE ) // Clear buffer
-		goto DXL_HAL_OPEN_ERROR;
-	if( ClearCommError( ghSerial_Handle, &dwError, NULL ) == FALSE )
-		goto DXL_HAL_OPEN_ERROR;
+	serinfo.flags &= ~ASYNC_SPD_MASK;
+	serinfo.flags |= ASYNC_SPD_CUST;
+	serinfo.custom_divisor = serinfo.baud_base / baudrate;
 	
-	if( GetCommTimeouts( ghSerial_Handle, &Timeouts ) == FALSE )
+	if(ioctl(gSocket_fd, TIOCSSERIAL, &serinfo) < 0) {
+		fprintf(stderr, "Cannot set serial info\n");
+		return 0;
+	}*/
+	
+	dxl_hal_close();
+	
+	gfByteTransTime = (float)((1000.0f / baudrate) * 12.0f);
+	
+	strcpy(gDeviceName, dev_name);
+	memset(&newtio, 0, sizeof(newtio));
+	dxl_hal_close();
+	
+	if((gSocket_fd = open(gDeviceName, O_RDWR|O_NOCTTY|O_NONBLOCK)) < 0) {
+		fprintf(stderr, "device open error: %s\n", dev_name);
 		goto DXL_HAL_OPEN_ERROR;
-	// Timeout (Not using timeout)
-	// Immediatly return
-	Timeouts.ReadIntervalTimeout = 0;
-	Timeouts.ReadTotalTimeoutMultiplier = 0;
-	Timeouts.ReadTotalTimeoutConstant = 1; // must not be zero.
-	Timeouts.WriteTotalTimeoutMultiplier = 0;
-	Timeouts.WriteTotalTimeoutConstant = 0;
-	if( SetCommTimeouts( ghSerial_Handle, &Timeouts ) == FALSE )
-		goto DXL_HAL_OPEN_ERROR;
+	}
+
+	newtio.c_cflag		= B1000000|CS8|CLOCAL|CREAD;
+	newtio.c_iflag		= IGNPAR;
+	newtio.c_oflag		= 0;
+	newtio.c_lflag		= 0;
+	newtio.c_cc[VTIME]	= 0;	// time-out 값 (TIME * 0.1초) 0 : disable
+	newtio.c_cc[VMIN]	= 0;	// MIN 은 read 가 return 되기 위한 최소 문자 개수
+
+	tcflush(gSocket_fd, TCIFLUSH);
+	tcsetattr(gSocket_fd, TCSANOW, &newtio);
 	
 	return 1;
 
@@ -92,79 +100,80 @@ DXL_HAL_OPEN_ERROR:
 
 void dxl_hal_close()
 {
-	// Closing device
-	if(ghSerial_Handle != INVALID_HANDLE_VALUE)
-	{
-		CloseHandle( ghSerial_Handle );
-		ghSerial_Handle = INVALID_HANDLE_VALUE;
+	if(gSocket_fd != -1)
+		close(gSocket_fd);
+	gSocket_fd = -1;
+}
+
+int dxl_hal_set_baud( float baudrate )
+{
+	struct serial_struct serinfo;
+	
+	if(gSocket_fd == -1)
+		return 0;
+    
+	//USB2AX uses the CDC ACM driver for which these settings do not exist.
+    /*
+	if(ioctl(gSocket_fd, TIOCGSERIAL, &serinfo) < 0) {
+		fprintf(stderr, "Cannot get serial info\n");
+		return 0;
 	}
+	
+	serinfo.flags &= ~ASYNC_SPD_MASK;
+	serinfo.flags |= ASYNC_SPD_CUST;
+	serinfo.custom_divisor = serinfo.baud_base / baudrate;
+	
+	if(ioctl(gSocket_fd, TIOCSSERIAL, &serinfo) < 0) {
+		fprintf(stderr, "Cannot set serial info\n");
+		return 0;
+	}
+	*/
+	//dxl_hal_close();
+	//dxl_hal_open(gDeviceName, baudrate);
+	
+	gfByteTransTime = (float)((1000.0f / baudrate) * 12.0f);
+	return 1;
 }
 
 void dxl_hal_clear(void)
 {
-	// Clear communication buffer
-	PurgeComm( ghSerial_Handle, PURGE_RXABORT|PURGE_RXCLEAR );
+	tcflush(gSocket_fd, TCIFLUSH);
 }
 
 int dxl_hal_tx( unsigned char *pPacket, int numPacket )
 {
-	// Transmiting date
-	// *pPacket: data array pointer
-	// numPacket: number of data array
-	// Return: number of data transmitted. -1 is error.
-	DWORD dwToWrite, dwWritten;
-
-	dwToWrite = (DWORD)numPacket;
-	dwWritten = 0;
-
-	if( WriteFile( ghSerial_Handle, pPacket, dwToWrite, &dwWritten, NULL ) == FALSE )
-		return -1;
-	
-	return (int)dwWritten;
+	return write(gSocket_fd, pPacket, numPacket);
 }
 
 int dxl_hal_rx( unsigned char *pPacket, int numPacket )
 {
-	// Recieving date
-	// *pPacket: data array pointer
-	// numPacket: number of data array
-	// Return: number of data recieved. -1 is error.
-	DWORD dwToRead, dwRead;
+	memset(pPacket, 0, numPacket);
+	return read(gSocket_fd, pPacket, numPacket);
+}
 
-	dwToRead = (DWORD)numPacket;
-	dwRead = 0;
-
-	if( ReadFile( ghSerial_Handle, pPacket, dwToRead, &dwRead, NULL ) == FALSE )
-		return -1;
-
-	return (int)dwRead;
+static inline long myclock()
+{
+	struct timeval tv;
+	gettimeofday (&tv, NULL);
+	return (tv.tv_sec * 1000 + tv.tv_usec / 1000);
 }
 
 void dxl_hal_set_timeout( int NumRcvByte )
 {
-	// Start stop watch
-	// NumRcvByte: number of recieving data(to calculate maximum waiting time)
-	QueryPerformanceCounter( &gStartTime );
-	gfRcvWaitTime = (float)(gfByteTransTime*(float)NumRcvByte + 2*LATENCY_TIME + 2.0f);
+	glStartTime = myclock();
+	gfRcvWaitTime = (float)(gfByteTransTime*(float)NumRcvByte + 5.0f);
 }
 
 int dxl_hal_timeout(void)
 {
-	// Check timeout
-	// Return: 0 is false, 1 is true(timeout occurred)
-	LARGE_INTEGER end, freq;
-	double time;
-
-	QueryPerformanceCounter( &end );
-	QueryPerformanceFrequency( &freq );
-
-	time = (double)(end.QuadPart - gStartTime.QuadPart) / (double)freq.QuadPart;
-	time *= 1000.0;
-
-	if( time > gfRcvWaitTime )
+	long time;
+	
+	time = myclock() - glStartTime;
+	
+	if(time > gfRcvWaitTime)
 		return 1;
-	else if( time < 0 )
-		QueryPerformanceCounter( &gStartTime );
-
+	else if(time < 0)
+		glStartTime = myclock();
+		
 	return 0;
 }
