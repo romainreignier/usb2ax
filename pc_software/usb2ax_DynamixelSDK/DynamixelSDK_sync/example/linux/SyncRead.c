@@ -89,7 +89,7 @@ int main()
 	// Open device
 	if( dxl_initialize(DEFAULT_PORTNUM, DEFAULT_BAUDNUM) == 0 )
 	{
-		printf( "Failed to open USB2Dynamixel!\n" );
+		printf( "Failed to open USB2AX!\n" );
         printf( "Press any key to terminate...\n" );
         getch();
 		return 0;
